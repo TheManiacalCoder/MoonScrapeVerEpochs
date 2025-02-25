@@ -7,6 +7,7 @@ from datetime import datetime
 from gensim.models import Word2Vec
 from nltk.tokenize import word_tokenize
 import numpy as np
+from pathlib import Path
 
 class IntentAgent:
     def __init__(self, db):
@@ -19,13 +20,22 @@ class IntentAgent:
         }
         self.user_prompt = None
         self.word2vec_model = None
+        self.model_path = Path("models/word2vec")
+        self.model_path.mkdir(parents=True, exist_ok=True)
 
     def set_prompt(self, prompt: str):
         self.user_prompt = prompt
 
     def _train_word2vec(self, content: str):
+        model_file = self.model_path / "word2vec.model"
+        
+        if model_file.exists():
+            self.word2vec_model = Word2Vec.load(str(model_file))
+            return
+            
         sentences = [word_tokenize(sentence.lower()) for sentence in content.split('.') if sentence.strip()]
         self.word2vec_model = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4, epochs=10)
+        self.word2vec_model.save(str(model_file))
 
     def _get_sentence_vector(self, sentence: str):
         if not self.word2vec_model:
@@ -53,40 +63,36 @@ class IntentAgent:
             
         print(f"\n{Fore.CYAN}Analyzing content for intent: {self.user_prompt}{Style.RESET_ALL}")
         
-        # Self-dialogue about user intent
         current_date = datetime.now().strftime("%Y-%m-%d")
+        current_year = datetime.now().year
         
-        intent_analysis = f"""
-        Let's analyze the user's intent:
+        timestamp_context = f"""
+        Current Date: {current_date}
+        Current Year: {current_year}
         
-        User query: {self.user_prompt}
-        Current date: {current_date}
-        
-        What is the user probably asking about?
-        - The user seems to be looking for information about {self.user_prompt}
-        - They likely want specific details rather than general information
-        - The content should directly answer their query with supporting facts
-        - They probably want the most up-to-date information available
-        
-        How should we filter the content?
-        - Look for sections that directly address {self.user_prompt}
-        - Include 2-3 surrounding facts for context
-        - Prioritize data-driven information over opinions
-        - Focus on recent and authoritative sources
-        - Give higher priority to content with dates closest to {current_date}
-        - If dates are unavailable, prioritize content that appears most current
-        - Extract detailed key points with specific citations
-        
-        What should we exclude?
-        - Generic overviews that don't answer the specific query
-        - Outdated information (especially older than 1 year)
-        - Opinion pieces without factual support
-        - Content that only tangentially relates to the query
-        - Content with no clear publication date
+        Important: 
+        - Verify all information is current as of {current_date}
+        - Reject outdated information
+        - Prioritize recent sources
+        - Flag content older than 1 year
+        - Ensure temporal accuracy
         """
         
-        print(f"{Fore.MAGENTA}Intent analysis:{Style.RESET_ALL}")
-        print(intent_analysis)
+        intent_analysis = f"""
+        {timestamp_context}
+        
+        Analyze this query deeply: "{self.user_prompt}"
+        
+        First, verify temporal context:
+        1. Does the query require current information? [Yes/No]
+        2. Does the content contain timestamps? [Yes/No]
+        3. Is the content outdated? [Yes/No]
+        
+        Then determine temporal accuracy:
+        - If content is outdated: [Mark as invalid]
+        - If content is recent: [Mark as valid]
+        - If content lacks timestamps: [Verify with external sources]
+        """
         
         prompt = f"""
         {intent_analysis}
@@ -94,18 +100,9 @@ class IntentAgent:
         Now analyze this content:
         {content}
         
-        Extract only the sections that directly answer the user's prompt.
-        Include 2-3 surrounding facts/context for each relevant section.
-        Format the output as markdown with clear section headers.
-        
-        For each section include:
-        - Detailed key points with specific citations
-        - Supporting data and statistics
-        - Relevant quotes
-        - Source references
-        - Contextual information
-        
-        If no relevant content is found, return 'No relevant content found'.
+        Apply temporal filtering based on the query analysis.
+        Exclude outdated content unless explicitly requested.
+        Ensure all information is current as of {current_date}.
         """
         
         payload = {
@@ -122,78 +119,122 @@ class IntentAgent:
                     return data['choices'][0]['message']['content']
                 else:
                     error = await response.text()
-                    print(f"{Fore.RED}AI filtering error: {error}{Style.RESET_ALL}")
+                    print(f"{Fore.RED}Error filtering content: {error}{Style.RESET_ALL}")
                     return None
+
+    async def _spell_check_query(self, query: str) -> str:
+        prompt = f"""
+        Review this search query for spelling/grammar issues:
+        "{query}"
+        
+        Return ONLY: 
+        - The corrected query if errors found
+        - The original query if no errors
+        """
+        
+        payload = {
+            "model": self.config.ai_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_tokens": 100
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.base_url, headers=self.headers, json=payload) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data['choices'][0]['message']['content'].strip('"')
+                return query
 
     async def process_urls(self, urls: List[str]) -> Dict[str, str]:
         processed_data = {}
         total_urls = len(urls)
+        
+        current_date = datetime.now().strftime("%Y-%m-%d")
         
         with self.db.conn:
             cursor = self.db.conn.cursor()
             
             for i, url in enumerate(urls, 1):
                 try:
-                    print(f"\n{Fore.BLUE}[{i}/{total_urls}] Processing URL: {url}{Style.RESET_ALL}")
+                    print(f"\nProcessing URL {i}/{total_urls}: {url}")
                     
                     cursor.execute('''SELECT content FROM seo_content 
                                    JOIN urls ON seo_content.url_id = urls.id 
                                    WHERE urls.url = ?''', (url,))
                     result = cursor.fetchone()
                     
-                    if result and result[0] and not result[0].startswith("Error:"):
-                        print(f"{Fore.CYAN}🔍 Filtering content for: '{self.user_prompt}'{Style.RESET_ALL}")
-                        print(f"{Fore.WHITE}Content size: {len(result[0])} characters{Style.RESET_ALL}")
+                    if result and result[0]:
+                        content = result[0]
                         
-                        relevant_content = await self.filter_relevant_content(result[0])
-                        
-                        if relevant_content and relevant_content != 'No relevant content found':
-                            processed_data[url] = relevant_content
-                            print(f"{Fore.GREEN}✅ Found {len(relevant_content.splitlines())} relevant sections{Style.RESET_ALL}")
-                            print(f"{Fore.WHITE}Relevant content size: {len(relevant_content)} characters{Style.RESET_ALL}")
-                        else:
-                            print(f"{Fore.YELLOW}⚠️ No content matches the search intent{Style.RESET_ALL}")
-                    else:
-                        print(f"{Fore.RED}❌ Invalid content - cannot process{Style.RESET_ALL}")
-                        
+                        if "current" in self.user_prompt.lower() or "today" in self.user_prompt.lower():
+                            content = f"""
+                            Current Date: {current_date}
+                            
+                            {content}
+                            
+                            Important:
+                            - Verify all information is current as of {current_date}
+                            - Reject outdated information
+                            - Prioritize recent sources
+                            """
+                            
+                        processed_data[url] = content
                 except Exception as e:
-                    print(f"{Fore.RED}❌ Processing failed: {str(e)}{Style.RESET_ALL}")
+                    print(f"Processing failed: {str(e)}")
         
-        print(f"\n{Fore.GREEN}🎉 URL analysis complete!{Style.RESET_ALL}")
-        print(f"{Fore.WHITE}Processed {total_urls} URLs, found relevant content in {len(processed_data)} URLs{Style.RESET_ALL}")
+        print(f"\nURL analysis complete! Processed {total_urls} URLs, found relevant content in {len(processed_data)} URLs")
         
-        # Now process the final summary with epochs
         if processed_data:
-            print(f"\n{Fore.CYAN}Starting final summary with 5 epochs...{Style.RESET_ALL}")
+            print(f"\nStarting final summary with 5 epochs...")
             combined_content = "\n\n".join(processed_data.values())
             self._train_word2vec(combined_content)
             
             best_summary = None
             best_score = 0
+            previous_analysis = None
             
             for epoch in range(1, 6):
-                print(f"\n{Fore.BLUE}Epoch {epoch}/5:{Style.RESET_ALL}")
+                print(f"\nEpoch {epoch}/5:")
                 
                 analysis_focus = [
-                    "Extract and structure core facts and relationships",
-                    "Identify and connect supporting evidence and sources",
-                    "Analyze patterns and trends in the information",
-                    "Synthesize insights and draw conclusions",
-                    "Formulate actionable recommendations"
+                    "Extract and present core facts and data points",
+                    "Identify and present supporting evidence and sources",
+                    "Present patterns and trends with specific data",
+                    "Synthesize findings with direct evidence",
+                    "Formulate recommendations based on presented facts"
                 ][epoch-1]
                 
                 analysis_prompt = f"""
-                Perform a comprehensive analysis of this content:
+                Analyze this content and present factual information:
                 {combined_content}
                 
-                Analysis Focus: {analysis_focus}
+                Focus: {analysis_focus}
                 
-                For this iteration, specifically focus on:
-                - {analysis_focus}
-                - Clear structure and organization
-                - Depth of analysis
-                - Accuracy of information
-                - Relevance to user intent: {self.user_prompt}
+                Requirements:
+                - Present specific facts and data
+                - Include source references
+                - Use direct quotes where relevant
+                - Maintain factual accuracy
+                - Build upon previous analysis if available
+                - Focus on evidence-based presentation
+                
+                Previous Analysis:
+                {previous_analysis if previous_analysis else "No previous analysis"}
+                
+                Format:
+                - Fact: [specific fact]
+                - Source: [source reference]
+                - Evidence: [supporting data/quote]
+                - Context: [relevant background]
+                - Analysis: [your insights]
+                
+                Example:
+                Fact: Joe Biden is the current US President
+                Source: White House website
+                Evidence: Official inauguration date January 20, 2021
+                Context: 46th President, won 2020 election
+                Analysis: This confirms the current political leadership
                 """
                 
                 payload = {
@@ -213,31 +254,32 @@ class IntentAgent:
                             score = self._evaluate_analysis_quality(analysis, epoch)
                             score += semantic_score * 0.2
                             
-                            print(f"{Fore.WHITE}Epoch {epoch} quality score: {score:.2f}{Style.RESET_ALL}")
-                            print(f"{Fore.WHITE}Semantic similarity: {semantic_score:.2f}{Style.RESET_ALL}")
+                            print(f"Epoch {epoch} quality score: {score:.2f}")
+                            print(f"Semantic similarity: {semantic_score:.2f}")
                             
                             if score > best_score:
                                 best_summary = analysis
                                 best_score = score
-                                print(f"{Fore.GREEN}New best analysis found!{Style.RESET_ALL}")
+                                print("New best analysis found!")
                             
-                            print(f"{Fore.YELLOW}Epoch {epoch} analysis preview:{Style.RESET_ALL}")
-                            print(analysis[:200] + "...")
+                            print(f"Epoch {epoch} analysis preview:")
+                            print(analysis[:800] + "...")
                             
+                            previous_analysis = analysis
                             combined_content = f"{combined_content}\n\n### Previous Analysis\n{analysis}"
                             
                         else:
                             error = await response.text()
-                            print(f"{Fore.RED}Epoch {epoch} failed: {error}{Style.RESET_ALL}")
+                            print(f"Epoch {epoch} failed: {error}")
             
             if best_summary:
-                print(f"\n{Fore.GREEN}Final analysis complete! Best score: {best_score:.2f}{Style.RESET_ALL}")
+                print(f"\nFinal analysis complete! Best score: {best_score:.2f}")
                 return best_summary
             else:
-                print(f"{Fore.RED}Failed to generate valid analysis{Style.RESET_ALL}")
+                print("Failed to generate valid analysis")
                 return None
         else:
-            print(f"{Fore.YELLOW}No relevant content found for summary{Style.RESET_ALL}")
+            print("No relevant content found for summary")
             return None
 
     def _evaluate_analysis_quality(self, analysis: str, epoch: int) -> float:
@@ -246,6 +288,15 @@ class IntentAgent:
         # Base score for having content
         if analysis:
             score += 0.2
+            
+        # Freshness score (increases weight with epochs)
+        current_year = datetime.now().year
+        if str(current_year) in analysis:
+            score += 0.1 + (0.02 * epoch)
+            
+        # Timestamp score
+        if "as of" in analysis.lower() or "current" in analysis.lower():
+            score += 0.1
             
         # Structure score (increases weight with epochs)
         structure_components = [
@@ -257,7 +308,7 @@ class IntentAgent:
         ]
         for i, component in enumerate(structure_components):
             if component in analysis:
-                score += 0.1 + (0.02 * epoch)  # Increase weight with each epoch
+                score += 0.1 + (0.02 * epoch)
                 
         # Content quality (epoch-specific focus)
         if epoch == 1 and "facts" in analysis.lower():
@@ -274,4 +325,33 @@ class IntentAgent:
         # Length score (adjusted by epoch)
         score += min(len(analysis) / (2000 + (epoch * 200)), 0.2)
         
+        # Semantic similarity score (increases weight with epochs)
+        if self.word2vec_model:
+            semantic_score = self._calculate_semantic_similarity(analysis, self.user_prompt)
+            score += semantic_score * (0.1 + (0.02 * epoch))
+        
+        # Clarity score (increases with epochs)
+        if "clearly" in analysis.lower() or "concisely" in analysis.lower():
+            score += 0.05 * epoch
+            
+        # Depth score (increases with epochs)
+        depth_indicators = ["detailed", "in-depth", "comprehensive", "thorough"]
+        for indicator in depth_indicators:
+            if indicator in analysis.lower():
+                score += 0.05 * epoch
+                
+        # Specificity score (increases with epochs)
+        if "specific" in analysis.lower() or "precise" in analysis.lower():
+            score += 0.05 * epoch
+            
+        # Evidence score (increases with epochs)
+        evidence_indicators = ["data", "statistics", "research", "study", "source"]
+        for indicator in evidence_indicators:
+            if indicator in analysis.lower():
+                score += 0.05 * epoch
+                
+        # Actionability score (increases with epochs)
+        if "actionable" in analysis.lower() or "recommendation" in analysis.lower():
+            score += 0.05 * epoch
+            
         return min(score, 1.0)

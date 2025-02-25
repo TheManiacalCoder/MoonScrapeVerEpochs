@@ -17,6 +17,7 @@ from agents.content_processor import ContentProcessor
 from agents.intent_agent import IntentAgent
 import os
 import aiohttp
+from datetime import datetime
 
 init()  # Initialize Colorama to convert ANSI sequences to Windows equivalents
 
@@ -309,8 +310,22 @@ async def main():
         
         print("\nStarting comprehensive SEO analysis...")
         analyzer = OpenRouterAnalyzer(db)
+        analyzer.set_prompt(keyword)
         
-        # Create a dictionary with a single entry for the final summary
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        if final_summary:
+            final_summary = f"""
+            Current Date: {current_date}
+            
+            {final_summary}
+            
+            Important:
+            - Verify all information is current as of {current_date}
+            - Reject outdated information
+            - Prioritize recent sources
+            """
+        
         summary_data = {"final_summary": final_summary}
         report = await analyzer.analyze_urls(summary_data)
         

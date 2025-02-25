@@ -1,24 +1,22 @@
 @echo off
-echo Creating README.md...
-echo # moonscrapesearch >> README.md
+echo Checking for changes...
 
-echo Initializing Git repository...
-git init
+git status
 
-echo Adding all files...
+echo Adding all changes...
 git add .
 
 echo Committing changes...
-git commit -m "Initial commit - full codebase"
-
-echo Renaming branch to main...
-git branch -M main
-
-echo Adding remote origin...
-git remote add origin https://github.com/TheManiacalCoder/moonscrapesearch.git
+set /p commit_message="Enter commit message: "
+git commit -m "%commit_message%"
 
 echo Pushing to remote repository...
-git push -u origin main
+git push origin main
 
-echo Done!
+if %errorlevel% equ 0 (
+    echo Push successful!
+) else (
+    echo Push failed. Check for errors.
+)
+
 pause 
