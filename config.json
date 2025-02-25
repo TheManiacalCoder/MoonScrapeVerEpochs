@@ -1,8 +1,8 @@
 {
-    "email": "sean@mediamasters.ca",
-    "api_key": "43dd9ffafc698610",
+    "email": "dataforseo.com-API-Email-Here",
+    "api_key": "dataforseo.com-API-Key-Here",
     "openrouter": {
-        "api_key": "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",
+        "api_key": "OpenRouter-API-Key-Here",
         "ai_model": "amazon/nova-micro-v1"
     }
 }
