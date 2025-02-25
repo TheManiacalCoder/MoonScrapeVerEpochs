@@ -10,6 +10,9 @@ echo Committing changes...
 set /p commit_message="Enter commit message: "
 git commit -m "%commit_message%"
 
+echo Setting remote repository...
+git remote set-url origin https://github.com/TheManiacalCoder/MoonScrapeVerEpochs.git
+
 echo Pushing to remote repository...
 git push origin main
 

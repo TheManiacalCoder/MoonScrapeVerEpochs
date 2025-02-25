@@ -27,7 +27,7 @@ class OpenRouterAnalyzer:
 
     async def analyze_urls(self, filtered_content: dict):
         try:
-            print(f"{Fore.CYAN}Performing comprehensive SEO analysis...{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}Performing comprehensive analysis...{Style.RESET_ALL}")
             
             if "final_summary" not in filtered_content:
                 raise ValueError("Expected final summary data")
@@ -38,54 +38,68 @@ class OpenRouterAnalyzer:
             summary = filtered_content["final_summary"]
             current_date = datetime.now().strftime("%Y-%m-%d")
             
-            prompt = f"""
-            Current Date: {current_date}
-            Analysis Epoch: 1
+            # Extract and sort URLs
+            urls = self._sort_urls_by_relevance(summary)
+            most_relevant_url = urls[0] if urls else "No URL found"
             
-            Directly answer this question: {self.user_prompt}
-            Always give 1o key points relative to the query: {self.user_prompt}
+            best_analysis = None
+            best_score = 0.0
             
-            Use this content as your source:
-            {summary}
+            for epoch in range(1, 6):
+                print(f"\n{Fore.CYAN}Starting Epoch {epoch} analysis...{Style.RESET_ALL}")
+                
+                prompt = f"""
+                Analysis Epoch: {epoch}
+                
+                Directly answer this question: {self.user_prompt}
+                Always give 10 key points relative to the query, in a blog format naturally written.
+                
+                Use this content as your source:
+                {summary}
+                
+                Most relevant URL: {most_relevant_url}
+                
+                Requirements:
+                - Verify information is current as of {current_date}
+                """
+                
+                payload = {
+                    "model": self.config.ai_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1 + (epoch * 0.05),
+                    "max_tokens": 3000
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(self.base_url, headers=self.headers, json=payload) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            analysis = data['choices'][0]['message']['content']
+                            
+                            score = self._evaluate_analysis_quality(analysis, epoch)
+                            
+                            if score > best_score:
+                                best_analysis = analysis
+                                best_score = score
+                                print(f"{Fore.GREEN}New best analysis found! Score: {best_score:.2f}{Style.RESET_ALL}")
+                                print(f"\n{Fore.CYAN}Best Analysis Preview:{Style.RESET_ALL}")
+                                print(analysis[:800] + "...")
+                            
+                            print(f"Epoch {epoch} analysis preview:")
+                            print(analysis[:800] + "...")
+                            
+                        else:
+                            error = await response.text()
+                            print(f"{Fore.RED}Epoch {epoch} failed: {error}{Style.RESET_ALL}")
             
-            Requirements:
-            - Verify information is current as of {current_date}
-            - Cross-check with official sources
-            - Reject outdated information
-            - Prioritize primary sources
-            - Include timestamp verification
-            - Format as a direct response
-            
-            Verification Process:
-            1. Check source timestamps
-            2. Verify with official sources
-            3. Reject outdated claims
-            4. Confirm with current data
-            5. Include verification details
-            
-            Example format:
-            The current US President is Donald Trump (verified as of {current_date}). 
-            Source: White House website (verified)
-            Evidence: Official inauguration date January 20, 2025
-            Verification: Confirmed current as of {current_date}
-            """
-            
-            payload = {
-                "model": self.config.ai_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 3000
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.base_url, headers=self.headers, json=payload) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data['choices'][0]['message']['content']
-                    else:
-                        error = await response.text()
-                        raise Exception(f"OpenRouter API error: {error}")
-                        
+            if best_analysis:
+                print(f"\n{Fore.GREEN}Final analysis complete! Best score: {best_score:.2f}{Style.RESET_ALL}")
+                print(f"\n{Fore.CYAN}Final Analysis:{Style.RESET_ALL}")
+                print(best_analysis)
+                return best_analysis
+            else:
+                print(f"{Fore.RED}Failed to generate valid analysis{Style.RESET_ALL}")
+                return None
         except Exception as e:
             print(f"{Fore.RED}Error during analysis: {e}{Style.RESET_ALL}")
             return None
@@ -131,6 +145,64 @@ class OpenRouterAnalyzer:
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(report)
         print(f"{Fore.GREEN}Aggregated report saved to {report_path}{Style.RESET_ALL}")
+
+    def _evaluate_analysis_quality(self, analysis: str, epoch: int) -> float:
+        score = 0.0
+        
+        if analysis:
+            score += 0.2
+            
+        current_year = datetime.now().year
+        if str(current_year) in analysis:
+            score += 0.1 + (0.02 * epoch)
+            
+        if "as of" in analysis.lower() or "current" in analysis.lower():
+            score += 0.1
+            
+        structure_components = [
+            "### Executive Summary",
+            "### Key Findings",
+            "### Detailed Analysis",
+            "### Recommendations",
+            "### Sources"
+        ]
+        for i, component in enumerate(structure_components):
+            if component in analysis:
+                score += 0.1 + (0.02 * epoch)
+                
+        if epoch == 1 and "facts" in analysis.lower():
+            score += 0.1
+        if epoch == 2 and "evidence" in analysis.lower():
+            score += 0.1
+        if epoch == 3 and "patterns" in analysis.lower():
+            score += 0.1
+        if epoch == 4 and "insights" in analysis.lower():
+            score += 0.1
+        if epoch == 5 and "recommendations" in analysis.lower():
+            score += 0.1
+            
+        score += min(len(analysis) / (2000 + (epoch * 200)), 0.2)
+        
+        if "clearly" in analysis.lower() or "concisely" in analysis.lower():
+            score += 0.05 * epoch
+            
+        depth_indicators = ["detailed", "in-depth", "comprehensive", "thorough"]
+        for indicator in depth_indicators:
+            if indicator in analysis.lower():
+                score += 0.05 * epoch
+                
+        if "specific" in analysis.lower() or "precise" in analysis.lower():
+            score += 0.05 * epoch
+            
+        evidence_indicators = ["data", "statistics", "research", "study", "source"]
+        for indicator in evidence_indicators:
+            if indicator in analysis.lower():
+                score += 0.05 * epoch
+                
+        if "actionable" in analysis.lower() or "recommendation" in analysis.lower():
+            score += 0.05 * epoch
+            
+        return min(score, 1.0)
 
 async def main(urls):
     analyzer = OpenRouterAnalyzer()

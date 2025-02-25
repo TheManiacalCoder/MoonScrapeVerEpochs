@@ -286,26 +286,20 @@ async def main():
             print(f"{Fore.WHITE}Summary length: {len(final_summary)} characters{Style.RESET_ALL}")
             print(f"{Fore.WHITE}Executive Summary Preview:{Style.RESET_ALL}")
             
-            # Find the start of the executive summary
             exec_start = final_summary.find("### Executive Summary")
             if exec_start != -1:
-                # Extract the executive summary section
                 exec_end = final_summary.find("###", exec_start + 1)
                 if exec_end == -1:
                     exec_end = len(final_summary)
                 
-                # Get the full executive summary
                 exec_summary = final_summary[exec_start:exec_end]
                 
-                # Print the first 600 characters of the executive summary
                 print(exec_summary[:600] + "...")
                 
-                # If the summary is longer, show the last 200 characters too
                 if len(exec_summary) > 600:
                     print("\n...")
                     print(exec_summary[-200:])
             else:
-                # Fallback to first 600 characters if no executive summary found
                 print(final_summary[:600] + "...")
         
         print("\nStarting comprehensive SEO analysis...")
@@ -316,8 +310,6 @@ async def main():
         
         if final_summary:
             final_summary = f"""
-            Current Date: {current_date}
-            
             {final_summary}
             
             Important:
@@ -332,6 +324,16 @@ async def main():
         if report:
             await analyzer.save_report(report)
             print(f"{Fore.GREEN}Comprehensive SEO analysis complete!{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}Final Report:{Style.RESET_ALL}")
+            print(report)
+            
+            # Display collected URLs
+            print(f"\n{Fore.MAGENTA}Source URLs:{Style.RESET_ALL}")
+            if collected_urls:
+                for i, url in enumerate(collected_urls, 1):
+                    print(f"{i}. {url}")
+            else:
+                print("No source URLs found in the report")
         else:
             print(f"{Fore.RED}Failed to generate analysis report{Style.RESET_ALL}")
 

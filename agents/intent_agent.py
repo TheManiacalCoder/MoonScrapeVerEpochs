@@ -67,31 +67,25 @@ class IntentAgent:
         current_year = datetime.now().year
         
         timestamp_context = f"""
-        Current Date: {current_date}
-        Current Year: {current_year}
-        
         Important: 
         - Verify all information is current as of {current_date}
         - Reject outdated information
         - Prioritize recent sources
         - Flag content older than 1 year
         - Ensure temporal accuracy
+        - Use only the most relevant URL
         """
         
         intent_analysis = f"""
         {timestamp_context}
         
-        Analyze this query deeply: "{self.user_prompt}"
+        Analyze this content for relevance to: {self.user_prompt}
         
-        First, verify temporal context:
-        1. Does the query require current information? [Yes/No]
-        2. Does the content contain timestamps? [Yes/No]
-        3. Is the content outdated? [Yes/No]
-        
-        Then determine temporal accuracy:
-        - If content is outdated: [Mark as invalid]
-        - If content is recent: [Mark as valid]
-        - If content lacks timestamps: [Verify with external sources]
+        Requirements:
+        - Present specific facts and data
+        - Use only the most relevant URL
+        - Maintain factual accuracy
+        - Focus on evidence-based presentation
         """
         
         prompt = f"""
@@ -285,20 +279,16 @@ class IntentAgent:
     def _evaluate_analysis_quality(self, analysis: str, epoch: int) -> float:
         score = 0.0
         
-        # Base score for having content
         if analysis:
             score += 0.2
             
-        # Freshness score (increases weight with epochs)
         current_year = datetime.now().year
         if str(current_year) in analysis:
             score += 0.1 + (0.02 * epoch)
             
-        # Timestamp score
         if "as of" in analysis.lower() or "current" in analysis.lower():
             score += 0.1
             
-        # Structure score (increases weight with epochs)
         structure_components = [
             "### Executive Summary",
             "### Key Findings",
@@ -310,7 +300,6 @@ class IntentAgent:
             if component in analysis:
                 score += 0.1 + (0.02 * epoch)
                 
-        # Content quality (epoch-specific focus)
         if epoch == 1 and "facts" in analysis.lower():
             score += 0.1
         if epoch == 2 and "evidence" in analysis.lower():
@@ -322,35 +311,28 @@ class IntentAgent:
         if epoch == 5 and "recommendations" in analysis.lower():
             score += 0.1
             
-        # Length score (adjusted by epoch)
         score += min(len(analysis) / (2000 + (epoch * 200)), 0.2)
         
-        # Semantic similarity score (increases weight with epochs)
         if self.word2vec_model:
             semantic_score = self._calculate_semantic_similarity(analysis, self.user_prompt)
             score += semantic_score * (0.1 + (0.02 * epoch))
         
-        # Clarity score (increases with epochs)
         if "clearly" in analysis.lower() or "concisely" in analysis.lower():
             score += 0.05 * epoch
             
-        # Depth score (increases with epochs)
         depth_indicators = ["detailed", "in-depth", "comprehensive", "thorough"]
         for indicator in depth_indicators:
             if indicator in analysis.lower():
                 score += 0.05 * epoch
                 
-        # Specificity score (increases with epochs)
         if "specific" in analysis.lower() or "precise" in analysis.lower():
             score += 0.05 * epoch
             
-        # Evidence score (increases with epochs)
         evidence_indicators = ["data", "statistics", "research", "study", "source"]
         for indicator in evidence_indicators:
             if indicator in analysis.lower():
                 score += 0.05 * epoch
                 
-        # Actionability score (increases with epochs)
         if "actionable" in analysis.lower() or "recommendation" in analysis.lower():
             score += 0.05 * epoch
             
