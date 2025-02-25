@@ -4,6 +4,9 @@ from typing import List, Dict
 from colorama import Fore, Style
 from config.manager import ConfigManager
 from datetime import datetime
+from gensim.models import Word2Vec
+from nltk.tokenize import word_tokenize
+import numpy as np
 
 class IntentAgent:
     def __init__(self, db):
@@ -15,9 +18,24 @@ class IntentAgent:
             "Content-Type": "application/json"
         }
         self.user_prompt = None
+        self.word2vec_model = None
 
     def set_prompt(self, prompt: str):
         self.user_prompt = prompt
+
+    def _train_word2vec(self, content: str):
+        sentences = [word_tokenize(sentence.lower()) for sentence in content.split('.')]
+        self.word2vec_model = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+
+    def _get_sentence_vector(self, sentence: str):
+        if not self.word2vec_model:
+            return None
+            
+        words = word_tokenize(sentence.lower())
+        vectors = [self.word2vec_model.wv[word] for word in words if word in self.word2vec_model.wv]
+        if not vectors:
+            return None
+        return np.mean(vectors, axis=0)
 
     async def filter_relevant_content(self, content: str) -> str:
         if not self.user_prompt:
@@ -138,13 +156,15 @@ class IntentAgent:
         if processed_data:
             print(f"\n{Fore.CYAN}Starting final summary with 5 epochs...{Style.RESET_ALL}")
             combined_content = "\n\n".join(processed_data.values())
+            self._train_word2vec(combined_content)
+            
             best_summary = None
             best_score = 0
             
             for epoch in range(1, 6):
                 print(f"\n{Fore.BLUE}Epoch {epoch}/5:{Style.RESET_ALL}")
                 
-                focus_areas = [
+                analysis_focus = [
                     "Extract and structure core facts and relationships",
                     "Identify and connect supporting evidence and sources",
                     "Analyze patterns and trends in the information",
@@ -152,15 +172,14 @@ class IntentAgent:
                     "Formulate actionable recommendations"
                 ][epoch-1]
                 
-                summary_prompt = f"""
-                Create a comprehensive summary based on this filtered content:
+                analysis_prompt = f"""
+                Perform a comprehensive analysis of this content:
                 {combined_content}
                 
-                Epoch Focus: {focus_areas}
+                Analysis Focus: {analysis_focus}
                 
-                Build upon previous iterations to improve the summary.
-                For this epoch, specifically focus on:
-                - {focus_areas}
+                For this iteration, specifically focus on:
+                - {analysis_focus}
                 - Clear structure and organization
                 - Depth of analysis
                 - Accuracy of information
@@ -185,8 +204,8 @@ class IntentAgent:
                 
                 payload = {
                     "model": self.config.ai_model,
-                    "messages": [{"role": "user", "content": summary_prompt}],
-                    "temperature": 0.3 + (epoch * 0.05),  # Gradually increase creativity
+                    "messages": [{"role": "user", "content": analysis_prompt}],
+                    "temperature": 0.3 + (epoch * 0.05),
                     "max_tokens": 5000
                 }
                 
@@ -194,43 +213,54 @@ class IntentAgent:
                     async with session.post(self.base_url, headers=self.headers, json=payload) as response:
                         if response.status == 200:
                             data = await response.json()
-                            summary = data['choices'][0]['message']['content']
+                            analysis = data['choices'][0]['message']['content']
                             
-                            score = self._evaluate_summary_quality(summary, epoch)
+                            # Use Word2Vec embeddings for semantic similarity
+                            if self.word2vec_model:
+                                summary_vector = self._get_sentence_vector(analysis)
+                                prompt_vector = self._get_sentence_vector(self.user_prompt)
+                                if summary_vector is not None and prompt_vector is not None:
+                                    semantic_score = np.dot(summary_vector, prompt_vector) / (np.linalg.norm(summary_vector) * np.linalg.norm(prompt_vector))
+                                else:
+                                    semantic_score = 0
+                            else:
+                                semantic_score = 0
+                            
+                            score = self._evaluate_analysis_quality(analysis, epoch)
+                            score += semantic_score * 0.2  # Add semantic similarity to score
+                            
                             print(f"{Fore.WHITE}Epoch {epoch} quality score: {score:.2f}{Style.RESET_ALL}")
+                            print(f"{Fore.WHITE}Semantic similarity: {semantic_score:.2f}{Style.RESET_ALL}")
                             
                             if score > best_score:
-                                best_summary = summary
+                                best_summary = analysis
                                 best_score = score
-                                print(f"{Fore.GREEN}New best summary found!{Style.RESET_ALL}")
+                                print(f"{Fore.GREEN}New best analysis found!{Style.RESET_ALL}")
                             
-                            print(f"{Fore.YELLOW}Epoch {epoch} summary preview:{Style.RESET_ALL}")
-                            print(summary[:200] + "...")
+                            print(f"{Fore.YELLOW}Epoch {epoch} analysis preview:{Style.RESET_ALL}")
+                            print(analysis[:200] + "...")
                             
-                            combined_content = f"{combined_content}\n\n### Previous Summary\n{summary}"
+                            combined_content = f"{combined_content}\n\n### Previous Analysis\n{analysis}"
                             
-                            if score == 1.0:
-                                print(f"{Fore.GREEN}Perfect score achieved, stopping epochs early{Style.RESET_ALL}")
-                                break
                         else:
                             error = await response.text()
                             print(f"{Fore.RED}Epoch {epoch} failed: {error}{Style.RESET_ALL}")
             
             if best_summary:
-                print(f"\n{Fore.GREEN}Final summary complete! Best score: {best_score:.2f}{Style.RESET_ALL}")
+                print(f"\n{Fore.GREEN}Final analysis complete! Best score: {best_score:.2f}{Style.RESET_ALL}")
                 return best_summary
             else:
-                print(f"{Fore.RED}Failed to generate valid summary{Style.RESET_ALL}")
+                print(f"{Fore.RED}Failed to generate valid analysis{Style.RESET_ALL}")
                 return None
         else:
             print(f"{Fore.YELLOW}No relevant content found for summary{Style.RESET_ALL}")
             return None
 
-    def _evaluate_summary_quality(self, summary: str, epoch: int) -> float:
+    def _evaluate_analysis_quality(self, analysis: str, epoch: int) -> float:
         score = 0.0
         
         # Base score for having content
-        if summary:
+        if analysis:
             score += 0.2
             
         # Structure score (increases weight with epochs)
@@ -242,22 +272,22 @@ class IntentAgent:
             "### Sources"
         ]
         for i, component in enumerate(structure_components):
-            if component in summary:
+            if component in analysis:
                 score += 0.1 + (0.02 * epoch)  # Increase weight with each epoch
                 
         # Content quality (epoch-specific focus)
-        if epoch == 1 and "facts" in summary.lower():
+        if epoch == 1 and "facts" in analysis.lower():
             score += 0.1
-        if epoch == 2 and "evidence" in summary.lower():
+        if epoch == 2 and "evidence" in analysis.lower():
             score += 0.1
-        if epoch == 3 and "patterns" in summary.lower():
+        if epoch == 3 and "patterns" in analysis.lower():
             score += 0.1
-        if epoch == 4 and "insights" in summary.lower():
+        if epoch == 4 and "insights" in analysis.lower():
             score += 0.1
-        if epoch == 5 and "recommendations" in summary.lower():
+        if epoch == 5 and "recommendations" in analysis.lower():
             score += 0.1
             
         # Length score (adjusted by epoch)
-        score += min(len(summary) / (2000 + (epoch * 200)), 0.2)
+        score += min(len(analysis) / (2000 + (epoch * 200)), 0.2)
         
         return min(score, 1.0)

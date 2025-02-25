@@ -283,8 +283,29 @@ async def main():
         if final_summary:
             print(f"\n{Fore.MAGENTA}Preparing final summary for analysis...{Style.RESET_ALL}")
             print(f"{Fore.WHITE}Summary length: {len(final_summary)} characters{Style.RESET_ALL}")
-            print(f"{Fore.WHITE}Preview:{Style.RESET_ALL}")
-            print(final_summary[:200] + "...")
+            print(f"{Fore.WHITE}Executive Summary Preview:{Style.RESET_ALL}")
+            
+            # Find the start of the executive summary
+            exec_start = final_summary.find("### Executive Summary")
+            if exec_start != -1:
+                # Extract the executive summary section
+                exec_end = final_summary.find("###", exec_start + 1)
+                if exec_end == -1:
+                    exec_end = len(final_summary)
+                
+                # Get the full executive summary
+                exec_summary = final_summary[exec_start:exec_end]
+                
+                # Print the first 600 characters of the executive summary
+                print(exec_summary[:600] + "...")
+                
+                # If the summary is longer, show the last 200 characters too
+                if len(exec_summary) > 600:
+                    print("\n...")
+                    print(exec_summary[-200:])
+            else:
+                # Fallback to first 600 characters if no executive summary found
+                print(final_summary[:600] + "...")
         
         print("\nStarting comprehensive SEO analysis...")
         analyzer = OpenRouterAnalyzer(db)
