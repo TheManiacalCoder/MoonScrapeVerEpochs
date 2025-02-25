@@ -24,8 +24,8 @@ class IntentAgent:
         self.user_prompt = prompt
 
     def _train_word2vec(self, content: str):
-        sentences = [word_tokenize(sentence.lower()) for sentence in content.split('.')]
-        self.word2vec_model = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4)
+        sentences = [word_tokenize(sentence.lower()) for sentence in content.split('.') if sentence.strip()]
+        self.word2vec_model = Word2Vec(sentences, vector_size=100, window=5, min_count=1, workers=4, epochs=10)
 
     def _get_sentence_vector(self, sentence: str):
         if not self.word2vec_model:
@@ -36,6 +36,16 @@ class IntentAgent:
         if not vectors:
             return None
         return np.mean(vectors, axis=0)
+
+    def _calculate_semantic_similarity(self, text1: str, text2: str) -> float:
+        vec1 = self._get_sentence_vector(text1)
+        vec2 = self._get_sentence_vector(text2)
+        
+        if vec1 is None or vec2 is None:
+            return 0.0
+            
+        cosine_sim = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+        return max(0.0, min(1.0, cosine_sim))
 
     async def filter_relevant_content(self, content: str) -> str:
         if not self.user_prompt:
@@ -184,22 +194,6 @@ class IntentAgent:
                 - Depth of analysis
                 - Accuracy of information
                 - Relevance to user intent: {self.user_prompt}
-                
-                Format as:
-                ### Executive Summary
-                [High-level overview]
-                
-                ### Key Findings
-                [Main insights]
-                
-                ### Detailed Analysis
-                [In-depth examination]
-                
-                ### Recommendations
-                [Actionable suggestions]
-                
-                ### Sources
-                [Citations and references]
                 """
                 
                 payload = {
@@ -215,19 +209,9 @@ class IntentAgent:
                             data = await response.json()
                             analysis = data['choices'][0]['message']['content']
                             
-                            # Use Word2Vec embeddings for semantic similarity
-                            if self.word2vec_model:
-                                summary_vector = self._get_sentence_vector(analysis)
-                                prompt_vector = self._get_sentence_vector(self.user_prompt)
-                                if summary_vector is not None and prompt_vector is not None:
-                                    semantic_score = np.dot(summary_vector, prompt_vector) / (np.linalg.norm(summary_vector) * np.linalg.norm(prompt_vector))
-                                else:
-                                    semantic_score = 0
-                            else:
-                                semantic_score = 0
-                            
+                            semantic_score = self._calculate_semantic_similarity(analysis, self.user_prompt)
                             score = self._evaluate_analysis_quality(analysis, epoch)
-                            score += semantic_score * 0.2  # Add semantic similarity to score
+                            score += semantic_score * 0.2
                             
                             print(f"{Fore.WHITE}Epoch {epoch} quality score: {score:.2f}{Style.RESET_ALL}")
                             print(f"{Fore.WHITE}Semantic similarity: {semantic_score:.2f}{Style.RESET_ALL}")
